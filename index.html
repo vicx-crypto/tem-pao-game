@@ -561,8 +561,8 @@
       const speedFactor = coffeeActive ? 1.8 : 1;
       const currentSpeed = gameSpeed * speedFactor;
 
-      backgroundOffset += currentSpeed * dt * 0.25;
-      groundOffset += currentSpeed * dt * 1.2; // 🔹 chão se move mais rápido para dar sensação de esteira
+      backgroundOffset += currentSpeed * dt * (60 / 16);
+      groundOffset += currentSpeed * dt * (60 / 16); // 🔹 chão se move mais rápido para dar sensação de esteira
 
       for (const c of clouds) {
         c.x -= c.speed * delta / 16 * speedFactor;
