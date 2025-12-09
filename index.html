@@ -1,0 +1,1310 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>TEM PÃO! - Runner</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      background: #0b0c10;
+      color: #f5f5f5;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+    }
+
+    .game-container {
+      text-align: center;
+      padding: 8px;
+      max-width: 900px;
+      width: 100%;
+    }
+
+    canvas {
+      background: #1b2838;
+      border: 2px solid #444;
+      border-radius: 10px;
+      display: block;
+      margin: 0 auto 12px;
+      width: 100%;
+      max-width: 800px;
+      height: auto;
+    }
+
+    .ui {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      justify-content: center;
+      align-items: center;
+      margin-bottom: 8px;
+      font-size: 14px;
+    }
+
+    .ui span.value {
+      font-weight: 700;
+      color: #9bbc0f; /* verde do fundo */
+    }
+
+    button {
+      background: #efffcf; /* cor das nuvens */
+      color: #0b0c10;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #aaa;
+      margin-bottom: 4px;
+    }
+
+    .hint span {
+      display: inline-block;
+      margin: 0 4px;
+    }
+
+    .game-over {
+      color: #ff4d4d;
+      font-weight: bold;
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="game-container">
+    <div class="ui">
+      <div>Distância: <span id="distance" class="value">0</span> m</div>
+      <div>Pontuação: <span id="score" class="value">0</span></div>
+      <div>Recorde: <span id="highScore" class="value">0</span></div>
+      <div>Pães comidos: <span id="breadCount" class="value">0</span></div>
+      <button id="restartBtn">Jogar</button>
+      <button id="creditsBtn">Créditos</button>
+    </div>
+
+    <canvas id="game"></canvas>
+
+    <div class="hint">
+      <span>💻 Teclado: <b>ESPAÇO</b> / <b>↑</b> pula</span> |
+      <span>📱 Celular: toque para pular / começar</span>
+    </div>
+    <div id="gameOverText" class="game-over" style="display: none;">
+      Game Over! Pressione ESPAÇO, toque na tela ou clique em "Jogar de novo".
+    </div>
+  </div>
+
+  <!-- 🔊 MÚSICAS (substitua pelos seus arquivos de áudio reais) -->
+  <audio id="bgMusic" src="bg-music.mp3" preload="auto" loop></audio>
+  <audio id="turboMusic" src="turbo-music.mp3" preload="auto" loop></audio>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+
+    const LOGICAL_WIDTH = 800;
+    const LOGICAL_HEIGHT = 250;
+    const SCALE = 4;
+
+    canvas.width = LOGICAL_WIDTH * SCALE;
+    canvas.height = LOGICAL_HEIGHT * SCALE;
+    ctx.imageSmoothingEnabled = false;
+
+    const scoreEl = document.getElementById("score");
+    const highScoreEl = document.getElementById("highScore");
+    const distanceEl = document.getElementById("distance");
+    const breadCountEl = document.getElementById("breadCount");
+    const restartBtn = document.getElementById("restartBtn");
+    const creditsBtn = document.getElementById("creditsBtn");
+    const gameOverText = document.getElementById("gameOverText");
+
+    const bgMusic = document.getElementById("bgMusic");
+    const turboMusic = document.getElementById("turboMusic");
+
+    const groundY = LOGICAL_HEIGHT - 40;
+
+    let lastTime = 0;
+    let gameSpeed = 4;
+    let score = 0;
+    let highScore = 0;
+    let distance = 0;
+    let gameOver = false;
+    let gameState = "menu";
+
+    let introTargetX = LOGICAL_WIDTH * 0.45;
+
+    let backgroundOffset = 0;
+    const clouds = [];
+    let dogAnimTime = 0;
+    let playerAnimTime = 0;
+    let grandpaAnimTime = 0;
+
+    let grandpaSpeechText = "";
+    let grandpaSpeechTimer = 0;
+
+    let hasStartedMusic = false; // garante que só tentamos iniciar música depois da interação
+
+    // ÁUDIO FX
+    let audioCtx = null;
+    function getAudioCtx() {
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) audioCtx = new AC();
+      }
+      return audioCtx;
+    }
+
+    function playTone(freq, durationMs, type = "square", volume = 0.08) {
+      const ctxAudio = getAudioCtx();
+      if (!ctxAudio) return;
+      const osc = ctxAudio.createOscillator();
+      const gain = ctxAudio.createGain();
+      osc.type = type;
+      osc.frequency.value = freq;
+      osc.connect(gain);
+      gain.connect(ctxAudio.destination);
+      gain.gain.value = volume;
+      const now = ctxAudio.currentTime;
+      osc.start(now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + durationMs / 1000);
+      osc.stop(now + durationMs / 1000);
+    }
+
+    function playJumpSound() {
+      playTone(650, 120, "square", 0.06);
+    }
+
+    function playGameOverSound() {
+      playTone(220, 250, "sawtooth", 0.07);
+      setTimeout(() => playTone(160, 260, "triangle", 0.07), 200);
+    }
+
+    function playCoffeeSound() {
+      playTone(900, 80, "square", 0.08);
+      setTimeout(() => playTone(1200, 80, "triangle", 0.08), 80);
+    }
+
+    // CONTROLE DE MÚSICA
+    function ensureBgMusicPlaying() {
+      if (!bgMusic) return;
+      bgMusic.volume = 0.6;
+      bgMusic.play().catch(() => {});
+    }
+
+    function enterTurboMusic() {
+      if (bgMusic) {
+        bgMusic.volume = 0.2; // abaixa música normal
+      }
+      if (turboMusic) {
+        turboMusic.volume = 0.9;
+        turboMusic.currentTime = 0;
+        turboMusic.play().catch(() => {});
+      }
+    }
+
+    function exitTurboMusic() {
+      if (turboMusic) {
+        turboMusic.pause();
+        turboMusic.currentTime = 0;
+      }
+      if (bgMusic) {
+        bgMusic.volume = 0.6; // volta volume normal
+      }
+    }
+
+    if (typeof localStorage !== "undefined") {
+      const saved = localStorage.getItem("fugaAvoHighScore");
+      if (saved) highScore = parseInt(saved, 10) || 0;
+      highScoreEl.textContent = highScore;
+    }
+
+    // CONSTANTES DO JOGADOR
+    const BASE_PLAYER_WIDTH = 30;
+    const BASE_PLAYER_HEIGHT = 40;
+    const BASE_JUMP_FORCE = -17;
+    const BASE_GRAVITY = 0.9;
+    const MAX_BREAD_LEVEL = 5;
+    const BREADS_PER_LEVEL = 10;
+
+    // POWER-UP CAFÉ
+    const COFFEE_INTERVAL = 900;   // a cada 900 metros
+    const COFFEE_DURATION = 6000;  // 6 segundos
+    let coffeeActive = false;
+    let coffeeTimer = 0;
+    let nextCoffeeDistance = COFFEE_INTERVAL;
+    let coffeeShotPending = false;
+    const coffees = [];
+    let coffeeEndPending = false;          // aguardando momento seguro pra terminar
+    let postCoffeeSpawnCooldown = 0;       // 2s sem spawn de obstáculo depois do fim
+
+    const player = {
+      x: 160,
+      y: groundY - BASE_PLAYER_HEIGHT,
+      width: BASE_PLAYER_WIDTH,
+      height: BASE_PLAYER_HEIGHT,
+      vy: 0,
+      gravity: BASE_GRAVITY,
+      jumpForce: BASE_JUMP_FORCE,
+      isOnGround: true
+    };
+
+    let breadHits = 0;
+    let breadLevel = 0;
+    let jumpsCount = 0;
+    let breadShots = 0;
+    let giantScale = 1;
+
+    const grandpa = {
+      x: 40,
+      y: groundY - 50,
+      width: 28,
+      height: 50
+    };
+
+    const obstacles = [];
+    const breads = [];
+
+    let obstacleTimer = 0;
+    let obstacleInterval = 1500;
+    let breadTimer = 0;
+    const BASE_BREAD_INTERVAL = 5000; // ms
+
+    function initBackground() {
+      clouds.length = 0;
+      for (let i = 0; i < 4; i++) {
+        clouds.push({
+          x: Math.random() * LOGICAL_WIDTH,
+          y: 10 + Math.random() * 30,
+          width: 40 + Math.random() * 30,
+          height: 12 + Math.random() * 6,
+          speed: 0.4 + Math.random() * 0.4
+        });
+      }
+      backgroundOffset = 0;
+    }
+
+    function applyBreadLevel() {
+      player.width = (BASE_PLAYER_WIDTH + breadLevel * 4) * giantScale;
+      player.height = (BASE_PLAYER_HEIGHT + breadLevel * 5) * giantScale;
+      player.y = groundY - player.height;
+
+      const weakeningPerLevel = 2.0;
+      player.jumpForce = BASE_JUMP_FORCE + breadLevel * weakeningPerLevel;
+      const minJumpForce = -9;
+      if (player.jumpForce > minJumpForce) {
+        player.jumpForce = minJumpForce;
+      }
+
+      const gravityDecreasePerLevel = 0.07;
+      player.gravity = Math.max(0.55, BASE_GRAVITY - breadLevel * gravityDecreasePerLevel);
+    }
+
+    function resetPlayerStats() {
+      breadHits = 0;
+      breadLevel = 0;
+      jumpsCount = 0;
+      breadShots = 0;
+      giantScale = 1;
+      breadCountEl.textContent = "0";
+
+      player.vy = 0;
+      player.isOnGround = true;
+      applyBreadLevel();
+    }
+
+    function resetPlayerPositionForIntro() {
+      player.x = grandpa.x + 80;
+      player.y = groundY - player.height;
+      player.vy = 0;
+      player.isOnGround = true;
+    }
+
+    function resetCoffeeState() {
+      coffeeActive = false;
+      coffeeTimer = 0;
+      nextCoffeeDistance = COFFEE_INTERVAL;
+      coffeeShotPending = false;
+      coffees.length = 0;
+      coffeeEndPending = false;
+      postCoffeeSpawnCooldown = 0;
+      exitTurboMusic(); // garante que música turbo não fique presa
+    }
+
+    function startGame() {
+      score = 0;
+      distance = 0;
+      gameSpeed = 0;
+      gameOver = false;
+
+      resetPlayerStats();
+      resetCoffeeState();
+      resetPlayerPositionForIntro();
+
+      obstacles.length = 0;
+      breads.length = 0;
+
+      obstacleTimer = 0;
+      obstacleInterval = 1500;
+      breadTimer = 0;
+      dogAnimTime = 0;
+      playerAnimTime = 0;
+      grandpaAnimTime = 0;
+      grandpaSpeechText = "";
+      grandpaSpeechTimer = 0;
+
+      gameOverText.style.display = "none";
+      restartBtn.textContent = "Jogar";
+
+      gameState = "intro";
+    }
+
+    function onBreadHit(isGiant = false) {
+      breadHits++;
+      breadCountEl.textContent = breadHits;
+
+      const newLevel = Math.min(
+        Math.floor(breadHits / BREADS_PER_LEVEL),
+        MAX_BREAD_LEVEL
+      );
+
+      if (newLevel !== breadLevel) {
+        breadLevel = newLevel;
+      }
+
+      if (isGiant) {
+        giantScale *= 2;
+        if (giantScale > 4) giantScale = 4;
+      }
+
+      applyBreadLevel();
+    }
+
+    function spawnObstacle() {
+      const type = Math.random() < 0.5 ? "dog" : "tp";
+
+      if (type === "dog") {
+        const width = 40;
+        const height = 26;
+        const spacing = 10;
+        const groupSize = Math.random() < 0.5 ? 1 : 2;
+
+        if (groupSize === 1) {
+          const color = Math.random() < 0.5 ? "caramel" : "black";
+          obstacles.push({
+            type: "dog",
+            x: LOGICAL_WIDTH + 20,
+            y: groundY - height,
+            width,
+            height,
+            color,
+            knocked: false,
+            vx: 0,
+            vy: 0
+          });
+        } else {
+          obstacles.push({
+            type: "dog",
+            x: LOGICAL_WIDTH + 20,
+            y: groundY - height,
+            width,
+            height,
+            color: "caramel",
+            knocked: false,
+            vx: 0,
+            vy: 0
+          });
+          obstacles.push({
+            type: "dog",
+            x: LOGICAL_WIDTH + 20 + (width + spacing),
+            y: groundY - height,
+            width,
+            height,
+            color: "black",
+            knocked: false,
+            vx: 0,
+            vy: 0
+          });
+        }
+      } else {
+        const width = 40;
+        const height = 26;
+        obstacles.push({
+          type: "tp",
+          x: LOGICAL_WIDTH + 20,
+          y: groundY - height,
+          width,
+          height,
+          knocked: false,
+          vx: 0,
+          vy: 0
+        });
+      }
+    }
+
+    function spawnBread() {
+      // altura na linha dos ombros do idoso
+      const handY = grandpa.y + 12;
+      const speedLevel = Math.floor(distance / 300);
+      const baseSpeed = 11 + speedLevel * 1.5;
+
+      breadShots++;
+      const isGiant = breadShots % 30 === 0;
+
+      const width = isGiant ? 32 : 18;
+      const height = isGiant ? 22 : 14;
+
+      breads.push({
+        x: grandpa.x + grandpa.width + 8,
+        y: handY,
+        width,
+        height,
+        baseVx: baseSpeed,
+        giant: isGiant
+      });
+
+      grandpaSpeechText = isGiant
+        ? "PÃOZÃO!!"
+        : (Math.random() < 0.5 ? "TEM PÃO!!" : "COME!");
+      grandpaSpeechTimer = 800;
+    }
+
+    // Cria a xícara de café lançada pelo vovô
+    function spawnCoffeeCup() {
+      const handY = grandpa.y + 12; // mesma altura de ombro
+      coffees.push({
+        x: grandpa.x + grandpa.width + 6,
+        y: handY,
+        width: 14,
+        height: 12,
+        vx: 16
+      });
+      coffeeShotPending = true;
+      grandpaSpeechText = "CAFÉ!!";
+      grandpaSpeechTimer = 700;
+    }
+
+    function activateCoffeeMode() {
+      coffeeActive = true;
+      coffeeTimer = COFFEE_DURATION;
+      coffeeEndPending = false;
+      playCoffeeSound();
+      enterTurboMusic(); // entra música turbo
+    }
+
+    function update(delta) {
+      const dt = delta / 1000;
+
+      dogAnimTime += delta;
+      playerAnimTime += delta;
+      grandpaAnimTime += delta;
+
+      if (grandpaSpeechTimer > 0) {
+        grandpaSpeechTimer -= delta;
+        if (grandpaSpeechTimer < 0) grandpaSpeechTimer = 0;
+      }
+
+      // TIMER do café e lógica de término seguro
+      if (coffeeActive) {
+        coffeeTimer -= delta;
+        if (coffeeTimer <= 0 && !coffeeEndPending) {
+          coffeeTimer = 0;
+          coffeeEndPending = true;
+        }
+      }
+
+      if (coffeeEndPending) {
+        // só permite o fim se não tiver obstáculo "perigoso" perto da frente do jogador
+        let safe = true;
+        const playerFront = player.x + player.width;
+        const SAFE_DIST_AHEAD = 80; // px à frente
+        for (const obs of obstacles) {
+          if (!obs.knocked) {
+            const dx = obs.x - playerFront;
+            if (dx > -20 && dx < SAFE_DIST_AHEAD) {
+              safe = false;
+              break;
+            }
+          }
+        }
+        if (safe) {
+          coffeeActive = false;
+          coffeeEndPending = false;
+          postCoffeeSpawnCooldown = 2000; // 2s sem novos obstáculos
+          exitTurboMusic(); // volta música pro normal
+        } else {
+          coffeeActive = true;
+        }
+      }
+
+      // velocidade efetiva quando café está ativo
+      const speedFactor = coffeeActive ? 1.8 : 1;
+      const currentSpeed = gameSpeed * speedFactor;
+
+      backgroundOffset += currentSpeed * dt * 0.25;
+      for (const c of clouds) {
+        c.x -= c.speed * delta / 16 * speedFactor;
+        if (c.x + c.width < -20) {
+          c.x = LOGICAL_WIDTH + Math.random() * 100;
+          c.y = 10 + Math.random() * 30;
+        }
+      }
+
+      if (gameState === "intro") {
+        const introSpeed = 160;
+        player.x += introSpeed * dt;
+        player.y = groundY - player.height;
+        player.vy = 0;
+        player.isOnGround = true;
+
+        if (player.x >= introTargetX) {
+          player.x = introTargetX;
+          gameState = "playing";
+          gameSpeed = 4;
+          obstacleTimer = 0;
+          breadTimer = 0;
+        }
+        return;
+      }
+
+      if (gameState !== "playing") return;
+
+      // distância usa velocidade efetiva
+      distance += currentSpeed * dt * 3.5;
+      distanceEl.textContent = Math.floor(distance);
+
+      // disparar café a cada 900m
+      if (!coffeeActive && !coffeeShotPending && distance >= nextCoffeeDistance) {
+        spawnCoffeeCup();
+        nextCoffeeDistance += COFFEE_INTERVAL;
+      }
+
+      score += dt * 9 * speedFactor;
+      scoreEl.textContent = Math.floor(score);
+
+      // velocidade base crescente
+      gameSpeed += dt * 0.12;
+      if (gameSpeed > 10) gameSpeed = 10;
+
+      // física do jogador
+      player.vy += player.gravity;
+      player.y += player.vy;
+
+      if (player.y + player.height >= groundY) {
+        player.y = groundY - player.height;
+        player.vy = 0;
+        player.isOnGround = true;
+      }
+
+      // obstáculos
+      if (postCoffeeSpawnCooldown > 0) {
+        postCoffeeSpawnCooldown -= delta;
+      } else {
+        obstacleTimer += delta;
+        if (obstacleTimer > obstacleInterval) {
+          spawnObstacle();
+          obstacleTimer = 0;
+          obstacleInterval = Math.max(900, obstacleInterval - 20);
+        }
+      }
+
+      for (let i = obstacles.length - 1; i >= 0; i--) {
+        const obs = obstacles[i];
+
+        if (obs.knocked) {
+          obs.x += obs.vx;
+          obs.y += obs.vy;
+          obs.vy += 0.5;
+        } else {
+          obs.x -= currentSpeed;
+        }
+
+        if (obs.x + obs.width < -60 || obs.x > LOGICAL_WIDTH + 100 || obs.y > LOGICAL_HEIGHT + 80) {
+          obstacles.splice(i, 1);
+          continue;
+        }
+
+        // colisão com jogador
+        if (
+          player.x < obs.x + obs.width &&
+          player.x + player.width > obs.x &&
+          player.y < obs.y + obs.height &&
+          player.y + player.height > obs.y
+        ) {
+          if (coffeeActive) {
+            obs.knocked = true;
+            const dir = Math.random() < 0.5 ? -1 : 1;
+            obs.vx = 6 * dir;
+            obs.vy = -8;
+          } else {
+            triggerGameOver();
+            return;
+          }
+        }
+      }
+
+      // lógica dos pães
+      const breadDifficulty = Math.floor(distance / 300);
+      const currentBreadInterval = Math.max(
+        1800,
+        BASE_BREAD_INTERVAL - breadDifficulty * 400
+      );
+
+      breadTimer += delta;
+      if (breadTimer > currentBreadInterval) {
+        spawnBread();
+        breadTimer = 0;
+      }
+
+      for (let i = breads.length - 1; i >= 0; i--) {
+        const b = breads[i];
+
+        const effectiveVx = (b.baseVx + gameSpeed * 1.1) * speedFactor;
+        b.x += effectiveVx * dt * 60 / 16;
+
+        if (b.x > LOGICAL_WIDTH + 40 || b.x + b.width < 0) {
+          breads.splice(i, 1);
+          continue;
+        }
+
+        if (
+          player.x < b.x + b.width &&
+          player.x + player.width > b.x &&
+          player.y < b.y + b.height &&
+          player.y + player.height > b.y
+        ) {
+          onBreadHit(b.giant);
+          breads.splice(i, 1);
+          continue;
+        }
+      }
+
+      // lógica da xícara de café lançada
+      for (let i = coffees.length - 1; i >= 0; i--) {
+        const c = coffees[i];
+        c.x += c.vx * dt * 60 / 16;
+
+        if (c.x > LOGICAL_WIDTH + 40) {
+          coffees.splice(i, 1);
+          coffeeShotPending = false;
+          continue;
+        }
+
+        if (
+          player.x < c.x + c.width &&
+          player.x + player.width > c.x &&
+          player.y < c.y + c.height &&
+          player.y + player.height > c.y
+        ) {
+          activateCoffeeMode();
+          coffees.splice(i, 1);
+          coffeeShotPending = false;
+          break;
+        }
+      }
+    }
+
+    function triggerGameOver() {
+      if (!gameOver) {
+        playGameOverSound();
+      }
+      gameOver = true;
+      gameState = "gameover";
+      if (score > highScore) {
+        highScore = Math.floor(score);
+        if (typeof localStorage !== "undefined") {
+          localStorage.setItem("fugaAvoHighScore", highScore);
+        }
+      }
+      highScoreEl.textContent = highScore;
+      gameOverText.style.display = "block";
+      restartBtn.textContent = "Jogar de novo";
+    }
+
+    function drawBackground() {
+      const grad = ctx.createLinearGradient(0, 0, 0, LOGICAL_HEIGHT);
+      grad.addColorStop(0, "#9bbc0f");
+      grad.addColorStop(1, "#0f380f");
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+      ctx.fillStyle = "rgba(239, 255, 207, 0.9)";
+      for (const c of clouds) {
+        const r = 5;
+        ctx.beginPath();
+        ctx.moveTo(c.x + r, c.y);
+        ctx.lineTo(c.x + c.width - r, c.y);
+        ctx.quadraticCurveTo(c.x + c.width, c.y, c.x + c.width, c.y + r);
+        ctx.lineTo(c.x + c.width, c.y + c.height - r);
+        ctx.quadraticCurveTo(
+          c.x + c.width,
+          c.y + c.height,
+          c.x + c.width - r,
+          c.y + c.height
+        );
+        ctx.lineTo(c.x + r, c.y + c.height);
+        ctx.quadraticCurveTo(c.x, c.y + c.height, c.x, c.y + c.height - r);
+        ctx.lineTo(c.x, c.y + r);
+        ctx.quadraticCurveTo(c.x, c.y, c.x + r, c.y);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = "rgba(15, 24, 10, 0.6)";
+      const spacing = 120;
+      const total = Math.ceil(LOGICAL_WIDTH / spacing) + 2;
+      const offset = backgroundOffset % spacing;
+      for (let i = -1; i < total; i++) {
+        const x = i * spacing - offset;
+        const w = 40 + ((i * 17) % 30);
+        const h = 40 + ((i * 23) % 60);
+        const y = groundY - h - 30;
+        ctx.fillRect(x, y, w, h);
+      }
+
+      const groundHeight = LOGICAL_HEIGHT - groundY;
+      ctx.fillStyle = "#5b5b5b";
+      ctx.fillRect(0, groundY, LOGICAL_WIDTH, groundHeight);
+
+      ctx.fillStyle = "#777";
+      const tileW = 26;
+      for (let x = 0; x < LOGICAL_WIDTH; x += tileW) {
+        ctx.fillRect(x + 4, groundY + 3, tileW - 8, groundHeight - 6);
+      }
+
+      ctx.strokeStyle = "#323232";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, groundY + 0.5);
+      ctx.lineTo(LOGICAL_WIDTH, groundY + 0.5);
+      ctx.stroke();
+    }
+
+    function drawPlayer() {
+      const baseChaos = coffeeActive ? 2.0 : 1.0;
+      const phase = Math.sin(playerAnimTime * 0.03 * baseChaos);
+      const legSwing = phase * 4 * baseChaos;
+      const armSwing = -phase * 4 * baseChaos;
+      const bob = Math.sin(playerAnimTime * 0.02 * baseChaos) * 1.5 * baseChaos;
+
+      const baseX = player.x + (coffeeActive ? (Math.random() - 0.5) * 2 : 0);
+      const baseY = player.y + bob;
+
+      ctx.fillStyle = "#f8f9fa";
+      ctx.fillRect(baseX + 4, baseY + 4, player.width - 10, player.height - 20);
+
+      ctx.fillStyle = "#d0d4dd";
+      ctx.fillRect(baseX + 4, baseY + 4, player.width - 10, 4);
+
+      ctx.fillStyle = "#8d5524";
+      ctx.fillRect(baseX + 4, baseY + player.height - 18, player.width - 10, 12);
+
+      const headBaseSize = 18;
+      const headSize = headBaseSize + breadLevel * 1.2 * giantScale;
+      const headX = baseX + 6;
+      const headY = baseY - headSize + 2;
+
+      ctx.fillStyle = "#f4c29a";
+      ctx.fillRect(headX, headY, headSize, headSize);
+
+      ctx.fillStyle = "#3b2b19";
+      ctx.fillRect(headX, headY, headSize, 5);
+      ctx.fillRect(headX, headY + 4, 4, headSize - 7);
+
+      ctx.fillStyle = "#e0a574";
+      ctx.fillRect(headX + headSize - 3, headY + 8, 3, 3);
+
+      ctx.fillStyle = "#222";
+      ctx.fillRect(headX + headSize - 6, headY + 5, 2, 2);
+
+      const armY = baseY + 10;
+      ctx.fillStyle = "#d8aa80";
+      ctx.fillRect(baseX + 3, armY, 10, 3);
+      ctx.fillRect(baseX + 2, armY + 3, 3, 7);
+
+      ctx.fillStyle = "#f4c29a";
+      const frontArmBaseX = baseX + player.width - 12 + armSwing * 0.2;
+      ctx.fillRect(frontArmBaseX, armY, 10, 3);
+      ctx.fillRect(frontArmBaseX + 7, armY + 3, 3, 7);
+
+      ctx.fillStyle = "#3a2f2f";
+      const backLegX = baseX + 7 - legSwing * 0.2;
+      ctx.fillRect(backLegX, baseY + player.height - 10, 5, 7);
+      ctx.fillRect(backLegX, baseY + player.height - 3, 5, 8);
+
+      ctx.fillStyle = "#282020";
+      const frontLegX = baseX + 16 + legSwing * 0.2;
+      ctx.fillRect(frontLegX, baseY + player.height - 10, 5, 7);
+      ctx.fillRect(frontLegX, baseY + player.height - 3, 5, 8);
+
+      ctx.fillStyle = "#f1faee";
+      ctx.fillRect(backLegX, baseY + player.height + 5, 7, 3);
+      ctx.fillRect(frontLegX, baseY + player.height + 5, 7, 3);
+
+      ctx.fillStyle = "#444";
+      ctx.fillRect(backLegX, baseY + player.height + 7, 7, 2);
+      ctx.fillRect(frontLegX, baseY + player.height + 7, 7, 2);
+    }
+
+    function drawGrandpa() {
+      const baseChaos = coffeeActive ? 2.0 : 1.0;
+      const phase = Math.sin(grandpaAnimTime * 0.025 * baseChaos);
+      const legSwing = phase * 3 * baseChaos;
+      const armSwing = -phase * 3 * baseChaos;
+      const bob = Math.sin(grandpaAnimTime * 0.02 * baseChaos) * 1 * baseChaos;
+
+      const baseX = grandpa.x + (coffeeActive ? (Math.random() - 0.5) * 2 : 0);
+      const baseY = grandpa.y + bob;
+
+      ctx.fillStyle = "#f4a261";
+      ctx.fillRect(baseX + 3, baseY + 6, grandpa.width - 4, grandpa.height - 22);
+
+      ctx.fillStyle = "#e0762f";
+      ctx.fillRect(baseX + 3, baseY + 6, grandpa.width - 4, 4);
+
+      ctx.fillStyle = "#1b263b";
+      ctx.fillRect(baseX + 3, baseY + grandpa.height - 18, grandpa.width - 4, 16);
+
+      ctx.fillStyle = "#5a3b22";
+      ctx.fillRect(baseX + 8, baseY - 17, 18, 17);
+
+      ctx.fillStyle = "#e9ecef";
+      ctx.fillRect(baseX + 8, baseY - 17, 18, 5);
+      ctx.fillRect(baseX + 8, baseY - 13, 4, 8);
+
+      ctx.fillStyle = "#4f2f18";
+      ctx.fillRect(baseX + 23, baseY - 9, 3, 4);
+
+      ctx.fillStyle = "#111";
+      ctx.fillRect(baseX + 20, baseY - 11, 2, 2);
+
+      ctx.fillStyle = "#e9ecef";
+      ctx.fillRect(baseX + 16, baseY - 4, 8, 5);
+
+      ctx.fillStyle = "#5a3b22";
+      const armFrontX = baseX + grandpa.width + 2 + armSwing * 0.2;
+      ctx.fillRect(armFrontX, baseY + 10, 14, 4);
+      ctx.fillRect(armFrontX + 10, baseY + 10, 4, 7);
+
+      const armBackX = baseX - 6 - armSwing * 0.1;
+      const armBackY = baseY + 10;
+      ctx.fillRect(armBackX, armBackY, 10, 4);
+      ctx.fillRect(armBackX - 2, armBackY + 4, 4, 6);
+
+      const cupX = armBackX - 4;
+      const cupY = armBackY + 2;
+      ctx.fillStyle = "#f8f9fa";
+      ctx.fillRect(cupX, cupY, 7, 6);
+
+      ctx.beginPath();
+      ctx.moveTo(cupX + 7, cupY + 2);
+      ctx.lineTo(cupX + 9, cupY + 3);
+      ctx.lineTo(cupX + 9, cupY + 5);
+      ctx.lineTo(cupX + 7, cupY + 6);
+      ctx.strokeStyle = "#b0b0b0";
+      ctx.lineWidth = 1;
+      ctx.stroke();
+
+      ctx.fillStyle = "#6f4e37";
+      ctx.fillRect(cupX + 1, cupY + 1, 5, 2);
+
+      const backLegX = baseX + 8 - legSwing * 0.2;
+      ctx.fillStyle = "#0b1723";
+      ctx.fillRect(backLegX, baseY + grandpa.height - 10, 6, 8);
+      ctx.fillRect(backLegX, baseY + grandpa.height - 2, 6, 8);
+
+      const frontLegX = baseX + grandpa.width - 6 + legSwing * 0.2;
+      ctx.fillStyle = "#020812";
+      ctx.fillRect(frontLegX, baseY + grandpa.height - 10, 6, 8);
+      ctx.fillRect(frontLegX, baseY + grandpa.height - 2, 6, 8);
+
+      ctx.fillStyle = "#c9d1d9";
+      ctx.fillRect(backLegX, baseY + grandpa.height + 6, 7, 3);
+      ctx.fillRect(frontLegX, baseY + grandpa.height + 6, 7, 3);
+
+      if (grandpaSpeechTimer > 0 && grandpaSpeechText) {
+        const padding = 5;
+        ctx.font = "bold 10px system-ui";
+        const textWidth = ctx.measureText(grandpaSpeechText).width;
+        const bw = textWidth + padding * 2;
+        const bh = 20;
+        const bx = baseX + grandpa.width + 22;
+        const by = baseY - 28;
+        const radius = 6;
+
+        ctx.fillStyle = "rgba(255,255,255,0.96)";
+        ctx.beginPath();
+        ctx.moveTo(bx + radius, by);
+        ctx.lineTo(bx + bw - radius, by);
+        ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + radius);
+        ctx.lineTo(bx + bw, by + bh - radius);
+        ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - radius, by + bh);
+        ctx.lineTo(bx + radius, by + bh);
+        ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - radius);
+        ctx.lineTo(bx, by + radius);
+        ctx.quadraticCurveTo(bx, by, bx + radius, by);
+        ctx.closePath();
+        ctx.fill();
+
+        ctx.strokeStyle = "#111";
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        // ponta do balão para o vovô (esquerda)
+        ctx.beginPath();
+        const tailMidY = by + bh / 2;
+        ctx.moveTo(bx, tailMidY - 3);
+        ctx.lineTo(bx - 8, tailMidY + 1);
+        ctx.lineTo(bx, tailMidY + 5);
+        ctx.closePath();
+        ctx.fillStyle = "rgba(255,255,255,0.96)";
+        ctx.fill();
+        ctx.stroke();
+
+        ctx.fillStyle = "#111";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(grandpaSpeechText, bx + padding, by + bh / 2 + 0.5);
+      }
+    }
+
+    function drawDogPixel(color, x, y, width, height) {
+      const isBlack = color === "black";
+      const outline = "#101010";
+      const coat    = isBlack ? "#333333" : "#d19a5b";
+      const muzzle  = isBlack ? "#777777" : "#f6e0b8";
+
+      const baseW = 16;
+      const baseH = 12;
+      const s = Math.min(width / baseW, height / baseH);
+
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(s, s);
+
+      ctx.fillStyle = outline;
+      ctx.fillRect(0, -9, 6, 6);
+      ctx.fillRect(-1, -7, 2, 3);
+
+      ctx.fillStyle = coat;
+      ctx.fillRect(1, -8, 4, 4);
+
+      ctx.fillStyle = muzzle;
+      ctx.fillRect(-1, -6, 2, 2);
+
+      ctx.fillStyle = outline;
+      ctx.fillRect(1, -10, 2, 2);
+
+      ctx.fillStyle = "#111";
+      ctx.fillRect(3, -7, 1, 1);
+
+      ctx.fillStyle = outline;
+      ctx.fillRect(6, -8, 9, 6);
+      ctx.fillStyle = coat;
+      ctx.fillRect(7, -7, 7, 4);
+
+      ctx.fillStyle = outline;
+      ctx.fillRect(14, -9, 2, 2);
+      ctx.fillRect(15, -10, 1, 2);
+
+      ctx.fillRect(2, -3, 2, 3);
+      ctx.fillRect(5, -3, 2, 3);
+      ctx.fillRect(9, -3, 2, 3);
+      ctx.fillRect(12, -3, 2, 3);
+
+      ctx.restore();
+    }
+
+    function drawObstacles() {
+      for (const obs of obstacles) {
+        if (obs.type === "dog") {
+          const baseX = obs.x;
+          const baseY = obs.y + obs.height;
+          drawDogPixel(obs.color, baseX, baseY, obs.width, obs.height);
+        } else if (obs.type === "tp") {
+          const towerWidth = obs.width;
+          const towerHeight = obs.height;
+          const baseY = obs.y + towerHeight;
+
+          const rollRadius = 8;
+          const baseLeftX = obs.x + 4;
+          const baseRightX = obs.x + towerWidth - 4 - rollRadius * 2;
+          const topX = obs.x + towerWidth / 2 - rollRadius;
+          const baseRollY = baseY - rollRadius * 2;
+          const topRollY = baseRollY - rollRadius * 2 + 2;
+
+          ctx.fillStyle = "#ffffff";
+          ctx.strokeStyle = "#d0d0d0";
+          ctx.lineWidth = 1;
+
+          ctx.beginPath();
+          ctx.ellipse(baseLeftX + rollRadius, baseRollY + rollRadius, rollRadius, rollRadius, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(baseRightX + rollRadius, baseRollY + rollRadius, rollRadius, rollRadius, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.beginPath();
+          ctx.ellipse(topX + rollRadius, topRollY + rollRadius, rollRadius, rollRadius, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.stroke();
+
+          ctx.fillStyle = "#bfbfbf";
+          ctx.beginPath();
+          ctx.ellipse(baseLeftX + rollRadius, baseRollY + rollRadius, 3, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(baseRightX + rollRadius, baseRollY + rollRadius, 3, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.beginPath();
+          ctx.ellipse(topX + rollRadius, topRollY + rollRadius, 3, 3, 0, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function drawBreads() {
+      for (const b of breads) {
+        ctx.beginPath();
+        const cx = b.x + b.width / 2;
+        const cy = b.y + b.height / 2;
+        const rx = b.width / 2;
+        const ry = b.height / 2;
+        ctx.fillStyle = b.giant ? "#f4a261" : "#f6bd60";
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = b.giant ? "#c45c3a" : "#e5989b";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(cx - rx / 2, cy);
+        ctx.lineTo(cx + rx / 2, cy);
+        ctx.stroke();
+      }
+    }
+
+    function drawCoffees() {
+      for (const c of coffees) {
+        const x = c.x;
+        const y = c.y;
+
+        ctx.fillStyle = "#f8f9fa";
+        ctx.fillRect(x, y, c.width, c.height);
+
+        ctx.fillStyle = "#6f4e37";
+        ctx.fillRect(x + 2, y + 2, c.width - 4, 3);
+
+        ctx.strokeStyle = "#b0b0b0";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(x + c.width, y + 3);
+        ctx.lineTo(x + c.width + 3, y + 4);
+        ctx.lineTo(x + c.width + 3, y + 7);
+        ctx.lineTo(x + c.width, y + 8);
+        ctx.stroke();
+      }
+    }
+
+    function drawOverlay() {
+      ctx.save();
+      ctx.textAlign = "center";
+
+      if (gameState === "menu") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.45)";
+        ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+        ctx.fillStyle = "#f4f4d7";
+        ctx.font = "bold 42px system-ui";
+        ctx.fillText("TEM PÃO!", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2 - 20);
+
+        ctx.fillStyle = "#e8f0c0";
+        ctx.font = "16px system-ui";
+        ctx.fillText(
+          "O seu Guilherme está bravo porque você não está comendo",
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 10
+        );
+
+        ctx.font = "14px system-ui";
+        ctx.fillText(
+          "Pressione ESPAÇO / ↑, toque no jogo ou clique em \"Jogar\" para começar",
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 40
+        );
+
+      } else if (gameState === "gameover") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.5)";
+        ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+        ctx.fillStyle = "#ff4d4d";
+        ctx.font = "bold 32px system-ui";
+        ctx.fillText("Game Over!", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2 - 10);
+
+        ctx.fillStyle = "#fdfdf0";
+        ctx.font = "16px system-ui";
+        ctx.fillText(
+          `Pontuação: ${Math.floor(score)}  |  Recorde: ${highScore}`,
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 18
+        );
+
+        ctx.font = "14px system-ui";
+        ctx.fillText(
+          "Pressione ESPAÇO / ↑, toque no jogo ou clique em \"Jogar de novo\"",
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 42
+        );
+
+      } else if (gameState === "credits") {
+        ctx.fillStyle = "rgba(0, 0, 0, 0.75)";
+        ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+
+        ctx.fillStyle = "#f4f4d7";
+        ctx.font = "bold 32px system-ui";
+        ctx.fillText("Créditos", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2 - 40);
+
+        ctx.font = "18px system-ui";
+        ctx.fillText("TEM PÃO!", LOGICAL_WIDTH / 2, LOGICAL_HEIGHT / 2 - 10);
+
+        ctx.font = "16px system-ui";
+        ctx.fillText(
+          "Criado por Victor Salgado e Valdelicer Fonseca",
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 18
+        );
+
+        ctx.font = "13px system-ui";
+        ctx.fillText(
+          "Pressione ESPAÇO / ↑ ou clique em \"Jogar\" para começar",
+          LOGICAL_WIDTH / 2,
+          LOGICAL_HEIGHT / 2 + 44
+        );
+      }
+
+      if (coffeeActive && gameState === "playing") {
+        ctx.fillStyle = "rgba(255,255,255,0.12)";
+        ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
+        ctx.fillStyle = "#f4f4d7";
+        ctx.font = "bold 14px system-ui";
+        ctx.fillText("CAFÉ TURBO!", LOGICAL_WIDTH / 2, 20);
+      }
+
+      ctx.restore();
+    }
+
+    function draw() {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+      ctx.imageSmoothingEnabled = false;
+
+      if (coffeeActive) {
+        const shakeX = (Math.random() - 0.5) * 4;
+        const shakeY = (Math.random() - 0.5) * 4;
+        ctx.translate(shakeX, shakeY);
+      }
+
+      drawBackground();
+      drawGrandpa();
+      drawPlayer();
+      drawObstacles();
+      drawBreads();
+      drawCoffees();
+      drawOverlay();
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    function loop(timestamp) {
+      const delta = timestamp - lastTime;
+      lastTime = timestamp;
+
+      update(delta);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+
+    function jump() {
+      if (gameState === "playing" && player.isOnGround) {
+        player.vy = player.jumpForce;
+        player.isOnGround = false;
+        playJumpSound();
+
+        jumpsCount++;
+
+        if (jumpsCount % 30 === 0 && breadHits > 0) {
+          breadHits = Math.max(0, breadHits - 3);
+          breadLevel = Math.min(
+            MAX_BREAD_LEVEL,
+            Math.floor(breadHits / BREADS_PER_LEVEL)
+          );
+          breadCountEl.textContent = breadHits;
+          applyBreadLevel();
+        }
+      }
+    }
+
+    function handleStartOrJump() {
+      if (!hasStartedMusic) {
+        ensureBgMusicPlaying();
+        hasStartedMusic = true;
+      }
+
+      if (gameState === "menu" || gameState === "gameover" || gameState === "credits") {
+        startGame();
+      } else {
+        jump();
+      }
+    }
+
+    window.addEventListener("keydown", (e) => {
+      if (e.code === "Space" || e.code === "ArrowUp") {
+        e.preventDefault();
+        handleStartOrJump();
+      }
+    });
+
+    restartBtn.addEventListener("click", () => {
+      handleStartOrJump();
+    });
+
+    creditsBtn.addEventListener("click", () => {
+      if (gameState === "credits") {
+        gameState = "menu";
+      } else if (gameState === "menu" || gameState === "gameover") {
+        gameState = "credits";
+      }
+    });
+
+    function touchHandler(e) {
+      e.preventDefault();
+      handleStartOrJump();
+    }
+    canvas.addEventListener("touchstart", touchHandler, { passive: false });
+    canvas.addEventListener("mousedown", () => {
+      handleStartOrJump();
+    });
+
+    initBackground();
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
