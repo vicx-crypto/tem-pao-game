@@ -148,6 +148,7 @@
     let introTargetX = LOGICAL_WIDTH * 0.45;
 
     let backgroundOffset = 0;
+    let groundOffset = 0; // 🔹 offset do chão para efeito de esteira
     const clouds = [];
     let dogAnimTime = 0;
     let playerAnimTime = 0;
@@ -268,12 +269,16 @@
     let breadShots = 0;
     let giantScale = 1;
 
+    // 🔹 Idoso ligeiramente mais alto
     const grandpa = {
       x: 40,
-      y: groundY - 50,
+      y: groundY - 56,
       width: 28,
-      height: 50
+      height: 56
     };
+
+    // 🔹 Linha aproximada da boca do menino (para pães/xícaras)
+    const PROJECTILE_LINE_Y = groundY - 56;
 
     const obstacles = [];
     const breads = [];
@@ -295,6 +300,7 @@
         });
       }
       backgroundOffset = 0;
+      groundOffset = 0; // 🔹 zera o offset do chão ao iniciar
     }
 
     function applyBreadLevel() {
@@ -456,8 +462,8 @@
     }
 
     function spawnBread() {
-      // altura na linha dos ombros do idoso
-      const handY = grandpa.y + 12;
+      // 🔹 linha aproximada da boca do menino
+      const projY = PROJECTILE_LINE_Y;
       const speedLevel = Math.floor(distance / 300);
       const baseSpeed = 11 + speedLevel * 1.5;
 
@@ -469,7 +475,7 @@
 
       breads.push({
         x: grandpa.x + grandpa.width + 8,
-        y: handY,
+        y: projY,
         width,
         height,
         baseVx: baseSpeed,
@@ -484,10 +490,11 @@
 
     // Cria a xícara de café lançada pelo vovô
     function spawnCoffeeCup() {
-      const handY = grandpa.y + 12; // mesma altura de ombro
+      // 🔹 mesma linha dos pães
+      const projY = PROJECTILE_LINE_Y;
       coffees.push({
         x: grandpa.x + grandpa.width + 6,
-        y: handY,
+        y: projY,
         width: 14,
         height: 12,
         vx: 16
@@ -555,6 +562,8 @@
       const currentSpeed = gameSpeed * speedFactor;
 
       backgroundOffset += currentSpeed * dt * 0.25;
+      groundOffset += currentSpeed * dt * 1.2; // 🔹 chão se move mais rápido para dar sensação de esteira
+
       for (const c of clouds) {
         c.x -= c.speed * delta / 16 * speedFactor;
         if (c.x + c.width < -20) {
@@ -741,6 +750,7 @@
       ctx.fillStyle = grad;
       ctx.fillRect(0, 0, LOGICAL_WIDTH, LOGICAL_HEIGHT);
 
+      // nuvens
       ctx.fillStyle = "rgba(239, 255, 207, 0.9)";
       for (const c of clouds) {
         const r = 5;
@@ -762,6 +772,7 @@
         ctx.fill();
       }
 
+      // prédios / fundos
       ctx.fillStyle = "rgba(15, 24, 10, 0.6)";
       const spacing = 120;
       const total = Math.ceil(LOGICAL_WIDTH / spacing) + 2;
@@ -774,16 +785,22 @@
         ctx.fillRect(x, y, w, h);
       }
 
+      // chão base
       const groundHeight = LOGICAL_HEIGHT - groundY;
       ctx.fillStyle = "#5b5b5b";
       ctx.fillRect(0, groundY, LOGICAL_WIDTH, groundHeight);
 
+      // 🔹 blocos do chão com movimento de esteira
       ctx.fillStyle = "#777";
       const tileW = 26;
-      for (let x = 0; x < LOGICAL_WIDTH; x += tileW) {
+      const tileCount = Math.ceil(LOGICAL_WIDTH / tileW) + 2;
+      const groundShift = groundOffset % tileW;
+      for (let i = -1; i < tileCount; i++) {
+        const x = i * tileW - groundShift;
         ctx.fillRect(x + 4, groundY + 3, tileW - 8, groundHeight - 6);
       }
 
+      // linha do chão
       ctx.strokeStyle = "#323232";
       ctx.lineWidth = 2;
       ctx.beginPath();
